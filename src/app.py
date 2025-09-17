@@ -1,144 +1,51 @@
 import streamlit as st
-import joblib
 import numpy as np
-import pandas as pd
-import os
-import matplotlib.pyplot as plt
-from datetime import datetime
+import joblib
+import base64
+import io
+from feature_extractor import extract_features
 
-# ========================
-# Paths
-# ========================
-MODEL_PATH = "models/phishing_model.joblib"
-SCALER_PATH = "models/scaler.joblib"
-LOG_PATH = "data/predictions.csv"
+st.set_page_config(page_title="AI Phishing Detector", layout="centered")
+st.title("🚨 AI-powered Phishing Detector")
+st.write("Enter a URL below to check if it’s safe or phishing.")
 
-# ========================
-# Load model & scaler
-# ========================
-model = joblib.load(MODEL_PATH)
-scaler = joblib.load(SCALER_PATH)
+# ----------------------
+# Load Model & Scaler from Secrets
+# ----------------------
+@st.cache_resource
+def load_model_and_scaler():
+    # Load model
+    model_b64 = st.secrets["models"]["phishing_model"]
+    model_bytes = base64.b64decode(model_b64)
+    model = joblib.load(io.BytesIO(model_bytes))
 
-# Ensure log file exists
-if not os.path.exists(LOG_PATH):
-    os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
-    pd.DataFrame(columns=["timestamp", "features", "prediction"]).to_csv(LOG_PATH, index=False)
+    # Load scaler
+    scaler_b64 = st.secrets["models"]["scaler"]
+    scaler_bytes = base64.b64decode(scaler_b64)
+    scaler = joblib.load(io.BytesIO(scaler_bytes))
 
-# ========================
-# Helper Functions
-# ========================
-def log_prediction(features, prediction):
-    df = pd.read_csv(LOG_PATH)
-    new_row = {"timestamp": datetime.now(), "features": features, "prediction": prediction}
-    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-    df.to_csv(LOG_PATH, index=False)
+    return model, scaler
 
-def make_prediction(features):
-    features_array = np.array(features).reshape(1, -1)
-    features_scaled = scaler.transform(features_array)
-    pred = model.predict(features_scaled)[0]
-    return "Phishing" if pred == 1 else "Legit"
+model, scaler = load_model_and_scaler()
 
-# ========================
-# Streamlit App
-# ========================
-st.set_page_config(page_title="AI-Powered Phishing Detector", layout="wide")
+# ----------------------
+# App UI
+# ----------------------
+url_input = st.text_input("Enter URL here:")
 
-st.sidebar.title("🔍 Navigation")
-page = st.sidebar.radio("Go to", ["Home", "Single Prediction", "Batch Prediction", "Logs & Dashboard"])
+if st.button("Check URL"):
+    if not url_input:
+        st.warning("Please enter a URL!")
+    else:
+        # Extract features automatically from URL
+        features = extract_features(url_input)
+        features_scaled = scaler.transform(features)
+        prediction = model.predict(features_scaled)
 
-st.title("🛡️ AI-Powered Phishing Detector")
+        if prediction[0] == 1:
+            st.error("⚠️ This URL is phishing!")
+        else:
+            st.success("✅ This URL looks safe!")
 
-# ========================
-# HOME PAGE
-# ========================
-if page == "Home":
-    st.markdown("""
-    ### Welcome to the AI-Powered Phishing Detector  
-    - Enter feature values manually for single predictions  
-    - Upload CSV files for **batch predictions**  
-    - View **logs and dashboards** to track results  
-    """)
-
-# ========================
-# SINGLE PREDICTION
-# ========================
-elif page == "Single Prediction":
-    st.subheader("🔎 Single Prediction")
-
-    feature_input = st.text_input("Enter comma-separated feature values", "")
-
-    if st.button("Predict"):
-        try:
-            features = list(map(float, feature_input.split(",")))
-            prediction = make_prediction(features)
-            log_prediction(features, prediction)
-
-            if prediction == "Phishing":
-                st.error("⚠️ Prediction: Phishing")
-            else:
-                st.success("✅ Prediction: Legit")
-
-        except Exception as e:
-            st.error(f"Error: {e}")
-
-# ========================
-# BATCH PREDICTION
-# ========================
-elif page == "Batch Prediction":
-    st.subheader("📂 Batch Prediction from CSV")
-
-    uploaded_file = st.file_uploader("Upload CSV with features", type=["csv"])
-
-    if uploaded_file is not None:
-        try:
-            df = pd.read_csv(uploaded_file)
-            features_scaled = scaler.transform(df.values)
-            preds = model.predict(features_scaled)
-            results = ["Phishing" if p == 1 else "Legit" for p in preds]
-
-            df["Prediction"] = results
-            st.dataframe(df)
-
-            # Log results
-            for i in range(len(df)):
-                log_prediction(df.iloc[i, :-1].tolist(), df.iloc[i, -1])
-
-            # Downloadable CSV
-            csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button("Download Predictions CSV", csv, "batch_predictions.csv", "text/csv")
-
-        except Exception as e:
-            st.error(f"Error: {e}")
-
-# ========================
-# LOGS & DASHBOARD
-# ========================
-elif page == "Logs & Dashboard":
-    st.subheader("📊 Prediction Logs & Dashboard")
-
-    try:
-        df = pd.read_csv(LOG_PATH)
-        st.dataframe(df.tail(20))  # Show recent 20 logs
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            counts = df["prediction"].value_counts()
-            fig, ax = plt.subplots()
-            counts.plot(kind="bar", color=["green", "red"], ax=ax)
-            ax.set_title("Prediction Distribution")
-            ax.set_ylabel("Count")
-            st.pyplot(fig)
-
-        with col2:
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
-            timeline = df.groupby(df["timestamp"].dt.date)["prediction"].count()
-            fig2, ax2 = plt.subplots()
-            timeline.plot(kind="line", marker="o", ax=ax2)
-            ax2.set_title("Predictions Over Time")
-            ax2.set_ylabel("Count")
-            st.pyplot(fig2)
-
-    except Exception as e:
-        st.error(f"Error loading logs: {e}")
+st.write("---")
+st.write("Powered by Streamlit | Model and scaler loaded securely from secrets")
