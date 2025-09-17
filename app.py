@@ -1,127 +1,51 @@
 import streamlit as st
-import joblib
 import numpy as np
-import pandas as pd
-import os
-from datetime import datetime
+import joblib
+import base64
+import io
+from feature_extractor import extract_features
 
-# Load model and scaler
-MODEL_PATH = "models/phishing_model.joblib"
-SCALER_PATH = "models/scaler.joblib"
-LOG_PATH = "data/predictions.csv"
+st.set_page_config(page_title="AI Phishing Detector", layout="centered")
+st.title("🚨 AI-powered Phishing Detector")
+st.write("Enter a URL below to check if it’s safe or phishing.")
 
-model = joblib.load(MODEL_PATH)
-scaler = joblib.load(SCALER_PATH)
+# ----------------------
+# Load Model & Scaler from Secrets
+# ----------------------
+@st.cache_resource
+def load_model_and_scaler():
+    # Load model
+    model_b64 = st.secrets["models"]["phishing_model"]
+    model_bytes = base64.b64decode(model_b64)
+    model = joblib.load(io.BytesIO(model_bytes))
 
-# App title
-st.title("🛡️ AI-Powered Phishing Detector")
+    # Load scaler
+    scaler_b64 = st.secrets["models"]["scaler"]
+    scaler_bytes = base64.b64decode(scaler_b64)
+    scaler = joblib.load(io.BytesIO(scaler_bytes))
 
-# Sidebar navigation
-menu = ["🔍 Predict", "📊 View Logs", "ℹ️ About"]
-choice = st.sidebar.radio("Navigation", menu)
+    return model, scaler
 
-# Prediction Page
-if choice == "🔍 Predict":
-    st.subheader("Make Predictions")
+model, scaler = load_model_and_scaler()
 
-    option = st.radio("Choose input method:", ["Manual Entry", "Upload CSV"])
+# ----------------------
+# App UI
+# ----------------------
+url_input = st.text_input("Enter URL here:")
 
-    # --- Manual Entry ---
-    if option == "Manual Entry":
-        features = st.text_area("Enter comma-separated feature values (48 numbers):")
-
-        if st.button("Predict (Manual)"):
-            try:
-                values = [float(x) for x in features.split(",")]
-                if len(values) != 48:
-                    st.error(f"❌ Expected 48 features, but got {len(values)}")
-                else:
-                    X = np.array(values).reshape(1, -1)
-                    X_scaled = scaler.transform(X)
-                    prediction = model.predict(X_scaled)[0]
-
-                    result = "Phishing 🚨" if prediction == 1 else "Legit ✅"
-                    st.success(f"Prediction: {result}")
-
-                    # Save log
-                    os.makedirs("data", exist_ok=True)
-                    log_entry = {
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "features": features,
-                        "prediction": result,
-                    }
-                    if os.path.exists(LOG_PATH):
-                        logs = pd.read_csv(LOG_PATH)
-                        logs = pd.concat([logs, pd.DataFrame([log_entry])], ignore_index=True)
-                    else:
-                        logs = pd.DataFrame([log_entry])
-                    logs.to_csv(LOG_PATH, index=False)
-
-            except Exception as e:
-                st.error(f"Error: {e}")
-
-    # --- CSV Upload ---
-    elif option == "Upload CSV":
-        uploaded_file = st.file_uploader("Upload a CSV file with 48 feature columns", type=["csv"])
-        if uploaded_file is not None:
-            try:
-                df = pd.read_csv(uploaded_file)
-
-                if df.shape[1] != 48:
-                    st.error(f"❌ Expected 48 columns, but got {df.shape[1]}")
-                else:
-                    X_scaled = scaler.transform(df.values)
-                    preds = model.predict(X_scaled)
-
-                    df["Prediction"] = ["Phishing 🚨" if p == 1 else "Legit ✅" for p in preds]
-                    st.dataframe(df)
-
-                    # Save log for all rows
-                    os.makedirs("data", exist_ok=True)
-                    logs = []
-                    for i, row in df.iterrows():
-                        logs.append({
-                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "features": row.drop("Prediction").to_list(),
-                            "prediction": row["Prediction"],
-                        })
-
-                    if os.path.exists(LOG_PATH):
-                        existing = pd.read_csv(LOG_PATH)
-                        logs_df = pd.concat([existing, pd.DataFrame(logs)], ignore_index=True)
-                    else:
-                        logs_df = pd.DataFrame(logs)
-
-                    logs_df.to_csv(LOG_PATH, index=False)
-
-                    st.success("✅ Predictions completed & logs updated")
-                    st.download_button("⬇️ Download Results", df.to_csv(index=False), "predictions_with_results.csv")
-
-            except Exception as e:
-                st.error(f"Error: {e}")
-
-# Logs Page
-elif choice == "📊 View Logs":
-    st.subheader("Prediction Logs")
-    if os.path.exists(LOG_PATH):
-        logs = pd.read_csv(LOG_PATH)
-        st.dataframe(logs)
-        st.download_button("⬇️ Download Logs", data=logs.to_csv(index=False), file_name="predictions.csv")
+if st.button("Check URL"):
+    if not url_input:
+        st.warning("Please enter a URL!")
     else:
-        st.warning("No logs available yet. Run a prediction first!")
+        # Extract features automatically from URL
+        features = extract_features(url_input)
+        features_scaled = scaler.transform(features)
+        prediction = model.predict(features_scaled)
 
-# About Page
-elif choice == "ℹ️ About":
-    st.subheader("About This Project")
-    st.write("""
-    This is an **AI-Powered Phishing Detector** built with:
-    - Python 🐍
-    - Scikit-learn 🤖
-    - Streamlit 🌐
+        if prediction[0] == 1:
+            st.error("⚠️ This URL is phishing!")
+        else:
+            st.success("✅ This URL looks safe!")
 
-    You can either:
-    - Enter **48 feature values manually** (comma-separated)
-    - Or **upload a CSV file** with multiple rows for batch predictions
-
-    Results are stored in logs for analysis 📊
-    """)
+st.write("---")
+st.write("Powered by Streamlit | Model and scaler loaded securely from secrets")
