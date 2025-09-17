@@ -3,7 +3,7 @@ import numpy as np
 import joblib
 import base64
 import io
-from features_extractor import extract_features
+from feature_extractor import extract_features
 
 st.set_page_config(page_title="AI Phishing Detector", layout="centered")
 st.title("🚨 AI-powered Phishing Detector")
